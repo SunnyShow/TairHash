@@ -91,4 +91,5 @@ cmake ../ && make -j
 <br/>
 
 ## 适用redis版本  
-由于TairHash依赖`unlink2`回调函数同步释放索引结构，因此需要确保你的Redis中REDISMODULE_TYPE_METHOD_VERSION不低于4。
+由于TairHash的active expire实现依赖`unlink2`回调函数(见这个[PR](https://github.com/redis/redis/pull/8999)))同步释放索引结构，因此需要确保你的Redis中REDISMODULE_TYPE_METHOD_VERSION不低于4。
+如果想要在低版本的redis(如redis-5.x)中使用TairhHash，则可以将CMakeLists.txt中的`add_definitions(-DENABLE_ACTIVE)`注释掉并重新编译，这样TairHash将禁止active expire功能，只支持passive expire，如果你会主动读取自己写入的field，那么passive expire也可以满足你的需求。

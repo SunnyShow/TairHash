@@ -88,4 +88,5 @@ then the tairhash_module.so library file will be generated in the lib directory
 
 
 ## Applicable Redis version   
-Since TairHash relies on the `unlink2` callback function to release the index structure synchronously, you need to make sure that REDISMODULE_TYPE_METHOD_VERSION in your Redis is not less than 4.
+Since TairHash's active expire implementation relies on the `unlink2` callback function (see this [PR](https://github.com/redis/redis/pull/8999))) to release the index structure synchronously, you need to ensure that REDISMODULE_TYPE_METHOD_VERSION in your Redis Not less than 4.
+If you want to use TairhHash in a lower version of redis (such as redis-5.x), you can comment out the `add_definitions(-DENABLE_ACTIVE)` in CMakeLists.txt and recompile, so that TairHash will disable the active expire function, only Support passive expire, if you will read the field written by yourself, then passive expire can also meet your needs.

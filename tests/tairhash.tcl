@@ -1264,24 +1264,25 @@ start_server {tags {"tairhash"} overrides {bind 0.0.0.0}} {
         assert { [string match "*db: 10, active_expired_fields: 60*db: 12, active_expired_fields: 30*" $info] }
     }
 
-    test {Copy with active expire} {
-        r del tairhashkey
-        r del tairhashkey_new
-        assert_equal 1 [r exhset tairhashkey field1 val1 ex 2]
-        assert_equal 1 [r exhset tairhashkey field2 val2 ex 1]
+    # If you are run in EFFICIENT_EXPIRE mode ,you can uncomment the following lines
+    # test {Copy with active expire} {
+    #     r del tairhashkey
+    #     r del tairhashkey_new
+    #     assert_equal 1 [r exhset tairhashkey field1 val1 ex 2]
+    #     assert_equal 1 [r exhset tairhashkey field2 val2 ex 1]
 
-        assert_equal 1 [r copy tairhashkey tairhashkey_new]
+    #     assert_equal 1 [r copy tairhashkey tairhashkey_new]
 
-        set slave_ttl [r exhttl tairhashkey_new field1]
-        assert {$slave_ttl <= 2 && $slave_ttl > 0 }
+    #     set slave_ttl [r exhttl tairhashkey_new field1]
+    #     assert {$slave_ttl <= 2 && $slave_ttl > 0 }
 
-        set slave_ttl [r exhttl tairhashkey_new field2]
-        assert {$slave_ttl <= 1 && $slave_ttl > 0 }
+    #     set slave_ttl [r exhttl tairhashkey_new field2]
+    #     assert {$slave_ttl <= 1 && $slave_ttl > 0 }
 
-        after 3000
+    #     after 3000
 
-        assert_equal 0 [r exists tairhashkey_new]
-    }
+    #     assert_equal 0 [r exists tairhashkey_new]
+    # }
 
     test {Reload after Exhset } {
         r del tairhashkey
