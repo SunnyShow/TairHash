@@ -321,9 +321,13 @@ inline static int expireTairHashObjIfNeeded(RedisModuleCtx *ctx, RedisModuleStri
     RedisModule_FreeString(NULL, field_dup);
 #else
     if (is_timer) {
+        /* See bugfix: https://github.com/redis/redis/pull/8617  
+                       https://github.com/redis/redis/pull/8097 
+                       https://github.com/redis/redis/pull/7037
+        */
         RedisModuleCtx *ctx2 = RedisModule_GetThreadSafeContext(NULL);
         RedisModule_SelectDb(ctx2, RedisModule_GetSelectedDb(ctx));
-        RedisModuleCallReply *reply = RedisModule_Call(ctx2, "EXHDEL", "ss!", key, field);
+        RedisModuleCallReply *reply = RedisModule_Call(ctx2, "EXHDELREPL", "ss!", key, field);
         if (reply != NULL) {
             RedisModule_FreeCallReply(reply);
         }
@@ -331,7 +335,6 @@ inline static int expireTairHashObjIfNeeded(RedisModuleCtx *ctx, RedisModuleStri
     } else {
         RedisModuleString *key_dup = RedisModule_CreateStringFromString(NULL, key);
         RedisModuleString *field_dup = RedisModule_CreateStringFromString(NULL, field);
-        long long before_min_score = o->expire_index->header->level[0].forward->score;
         m_zslDelete(o->expire_index, when, field_dup, NULL);
         m_dictDelete(o->hash, field);
         RedisModule_Replicate(ctx, "EXHDEL", "ss", key_dup, field_dup);
@@ -348,13 +351,20 @@ int delEmptyTairHashIfNeeded(RedisModuleCtx *ctx, RedisModuleKey *key, RedisModu
         return 0;
     }
 
-    RedisModule_DeleteKey(key);
 #if EFFICIENT_EXPIRE
+    RedisModule_DeleteKey(key);
     RedisModule_Replicate(ctx, "DEL", "s", raw_key);
 #else
+    /* See bugfix: https://github.com/redis/redis/pull/8617  
+                   https://github.com/redis/redis/pull/8097 
+                   https://github.com/redis/redis/pull/7037
+     */
     RedisModuleCtx *ctx2 = RedisModule_GetThreadSafeContext(NULL);
     RedisModule_SelectDb(ctx2, RedisModule_GetSelectedDb(ctx));
-    RedisModule_Replicate(ctx2, "DEL", "s", raw_key);
+    RedisModuleCallReply *reply = RedisModule_Call(ctx2, "DEL", "s!", raw_key);
+    if (reply != NULL) {
+        RedisModule_FreeCallReply(reply);
+    }
     RedisModule_FreeThreadSafeContext(ctx2);
 #endif
     return 1;
@@ -1316,7 +1326,6 @@ int TairHashTypeHmset_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv
     return REDISMODULE_OK;
 }
 
-/* Deprecated */
 /* EXHMSETWITHOPTS tairHashkey field1 val1 ver1 expire1 [field2 val2 ver2 expire2 ...] */
 int TairHashTypeHmsetWithOpts_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     RedisModule_AutoMemory(ctx);
@@ -2266,6 +2275,56 @@ int TairHashTypeHdel_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv,
     return REDISMODULE_OK;
 }
 
+#ifndef EFFICIENT_EXPIRE
+/* Since using `RedisModule_Replicate` directly in the timer callback will generate nested MULTIs, we have 
+ * to generate a new internal command and then use `RedisModule_Call` to call it in the module. It is best
+ * not to use this command directly in the client. */
+
+/* EXHDELREPL <key> <field> */
+int TairHashTypeHdelRepl_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    RedisModule_AutoMemory(ctx);
+    static int i = 0;
+    i++;
+
+    if (argc != 3) {
+        return RedisModule_WrongArity(ctx);
+    }
+
+    long long deleted = 0;
+
+    RedisModuleKey *key = RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ | REDISMODULE_WRITE);
+    int type = RedisModule_KeyType(key);
+    if (REDISMODULE_KEYTYPE_EMPTY != type && RedisModule_ModuleTypeGetType(key) != TairHashType) {
+        RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+        return REDISMODULE_ERR;
+    }
+
+    tairHashObj *tair_hash_obj = NULL;
+    if (type == REDISMODULE_KEYTYPE_EMPTY) {
+        return RedisModule_ReplyWithLongLong(ctx, 0);
+    } else {
+        tair_hash_obj = RedisModule_ModuleTypeGetValue(key);
+    }
+
+    int dbid = RedisModule_GetSelectedDb(ctx);
+    TairHashVal *tair_hash_val = NULL;
+    m_dictEntry *de = m_dictFind(tair_hash_obj->hash, argv[2]);
+    if (de) {
+        tair_hash_val = dictGetVal(de);
+        if (tair_hash_val->expire > 0) {
+            MY_Assert(tair_hash_obj->expire_index->header->level[0].forward != NULL);
+            m_zslDelete(tair_hash_obj->expire_index, tair_hash_val->expire, argv[2], NULL);
+        }
+        m_dictDelete(tair_hash_obj->hash, argv[2]);
+        RedisModule_Replicate(ctx, "EXHDEL", "ss", argv[1], argv[2]);
+        deleted++;
+    }
+
+    RedisModule_ReplyWithLongLong(ctx, deleted);
+    return REDISMODULE_OK;
+}
+#endif
+
 /* EXHDELWITHVER <key> <field> version> <field> <version> ...*/
 int TairHashTypeHdelWithVer_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     RedisModule_AutoMemory(ctx);
@@ -3118,6 +3177,7 @@ int Module_CreateCommands(RedisModuleCtx *ctx) {
     /* write cmds */
     CREATE_WRCMD("exhset", TairHashTypeHset_RedisCommand)
     CREATE_WRCMD("exhdel", TairHashTypeHdel_RedisCommand)
+    CREATE_WRCMD("exhdelrepl", TairHashTypeHdelRepl_RedisCommand)
     CREATE_WRCMD("exhdelwithver", TairHashTypeHdelWithVer_RedisCommand)
     CREATE_WRCMD("exhincrby", TairHashTypeHincrBy_RedisCommand)
     CREATE_WRCMD("exhincrbyfloat", TairHashTypeHincrByFloat_RedisCommand)
